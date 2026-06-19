@@ -25,7 +25,6 @@ button { font-family: inherit; }
 const e = React.createElement;
 const { useState, useEffect, useMemo, useRef } = React;
 const C = { bg:"#0f1117", surface:"#181c24", surfaceHigh:"#1f2433", border:"#2a3045", accent:"#e8a020", steel:"#4a7fa5", steelDim:"#2a4f6a", text:"#e8eaf0", dim:"#8a93a8", danger:"#c0392b", success:"#27ae60", warning:"#f39c12" };
-
 // ── MSAL CONFIG ───────────────────────────────────────────────
 const MSAL_CONFIG = {
   auth: {
@@ -35,17 +34,16 @@ const MSAL_CONFIG = {
   },
   cache: { cacheLocation:"sessionStorage", storeAuthStateInCookie:false }
 };
-const msalInstance = new msal.PublicClientApplication(MSAL_CONFIG);
+const msalInstance = new Msal.UserAgentApplication(MSAL_CONFIG);
 const SCOPES = ["User.Read","Sites.ReadWrite.All","Files.ReadWrite.All"];
 
 async function getToken() {
-  const accounts = msalInstance.getAllAccounts();
-  if (accounts.length === 0) throw new Error("No hay sesión activa");
+  const account = msalInstance.getAccount();
+  if (!account) throw new Error("No hay sesión activa");
   try {
-    const result = await msalInstance.acquireTokenSilent({ scopes:SCOPES, account:accounts[0] });
+    const result = await msalInstance.acquireTokenSilent({ scopes:SCOPES });
     return result.accessToken;
   } catch(ex) {
-    // Silent failed, try popup
     const result = await msalInstance.acquireTokenPopup({ scopes:SCOPES });
     return result.accessToken;
   }
