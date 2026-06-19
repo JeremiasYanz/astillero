@@ -553,20 +553,17 @@ function App() {
   const [newT, setNewT] = useState(false);
   const [ok, setOk] = useState("");
 
-  useEffect(()=>{
-    // Handle redirect callback first
-    msalInstance.handleRedirectPromise().then(()=>{
-      const accounts = msalInstance.getAllAccounts();
-      if (accounts.length > 0) {
-        setUserName(accounts[0].name||accounts[0].username);
-        getToken().then(t=>{ setTok(t); fullConnect(t); }).catch(ex=>setLoginError(ex.message));
-      }
-    }).catch(ex=>setLoginError(ex.message));
+useEffect(()=>{
+    const account = msalInstance.getAccount();
+    if (account) {
+      setUserName(account.name||account.userName||"");
+      getToken().then(t=>{ setTok(t); fullConnect(t); }).catch(ex=>setLoginError(ex.message));
+    }
   },[]);
 
   function handleLogin(t) {
-    const accounts = msalInstance.getAllAccounts();
-    if (accounts.length>0) setUserName(accounts[0].name||accounts[0].username);
+    const account = msalInstance.getAccount();
+    if (account) setUserName(account.name||account.userName||"");
     setTok(t);
     fullConnect(t);
   }
@@ -578,8 +575,8 @@ function App() {
 
   async function fullConnect(t) { setLoading(true); setErr(""); try{ setItems(await getItems(t)); }catch(ex){ setErr(ex.message); }finally{setLoading(false);} }
   async function connect(t) { setTok(t); await fullConnect(t); }
-  async function logout() {
-    await msalInstance.logoutPopup();
+ async function logout() {
+    msalInstance.logout();
     setTok(""); setItems([]); setUserName("");
   }
   function flash(m){ setOk(m); setTimeout(()=>setOk(""),3000); }
