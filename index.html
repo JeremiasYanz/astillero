@@ -10,12 +10,12 @@
 <script src="https://unpkg.com/msal@1.4.18/dist/msal.js"></script>
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; }
-body { background: #0f1117; font-family: Inter, system-ui, sans-serif; color: #e8eaf0; }
-::-webkit-scrollbar { width: 6px; } ::-webkit-scrollbar-track { background: #181c24; } ::-webkit-scrollbar-thumb { background: #2a3045; border-radius: 3px; }
-input, select, textarea { color-scheme: dark; font-family: inherit; }
+body { background: #f4f5f7; font-family: Inter, system-ui, sans-serif; color: #1a1d23; }
+::-webkit-scrollbar { width: 6px; } ::-webkit-scrollbar-track { background: #f0f0f0; } ::-webkit-scrollbar-thumb { background: #ccc; border-radius: 3px; }
+input, select, textarea { color-scheme: light; font-family: inherit; }
 table { border-collapse: collapse; width: 100%; }
 button { font-family: inherit; }
-.nav-tab { background:none; border:none; border-bottom:2px solid transparent; color:#8a93a8; padding:16px 20px; cursor:pointer; font-size:13px; margin-bottom:-2px; }
+.nav-tab { background:none; border:none; border-bottom:2px solid transparent; color:#6b7280; padding:16px 20px; cursor:pointer; font-size:13px; margin-bottom:-2px; font-weight:500; }
 .nav-tab.active { border-bottom-color:#e8a020; color:#e8a020; font-weight:700; }
 </style>
 </head>
@@ -24,7 +24,8 @@ button { font-family: inherit; }
 <script>
 const e = React.createElement;
 const { useState, useEffect, useMemo, useRef } = React;
-const C = { bg:"#0f1117", surface:"#181c24", surfaceHigh:"#1f2433", border:"#2a3045", accent:"#e8a020", steel:"#4a7fa5", steelDim:"#2a4f6a", text:"#e8eaf0", dim:"#8a93a8", danger:"#c0392b", success:"#27ae60", warning:"#f39c12" };
+const C = { bg:"#f4f5f7", surface:"#ffffff", surfaceHigh:"#f8f9fb", border:"#e5e7eb", accent:"#e8a020", steel:"#3b7dd8", steelDim:"#dbeafe", text:"#1a1d23", dim:"#6b7280", danger:"#dc2626", success:"#16a34a", warning:"#d97706" };
+
 // ── MSAL CONFIG ───────────────────────────────────────────────
 const MSAL_CONFIG = {
   auth: {
@@ -38,12 +39,13 @@ const msalInstance = new Msal.UserAgentApplication(MSAL_CONFIG);
 const SCOPES = ["User.Read","Sites.ReadWrite.All","Files.ReadWrite.All"];
 
 async function getToken() {
-  const account = msalInstance.getAccount();
-  if (!account) throw new Error("No hay sesión activa");
+  const accounts = msalInstance.getAllAccounts();
+  if (accounts.length === 0) throw new Error("No hay sesión activa");
   try {
-    const result = await msalInstance.acquireTokenSilent({ scopes:SCOPES });
+    const result = await msalInstance.acquireTokenSilent({ scopes:SCOPES, account:accounts[0] });
     return result.accessToken;
   } catch(ex) {
+    // Silent failed, try popup
     const result = await msalInstance.acquireTokenPopup({ scopes:SCOPES });
     return result.accessToken;
   }
@@ -151,10 +153,10 @@ function BVLogo() {
   return e("div",{style:{display:"flex",flexDirection:"column",alignItems:"flex-start",lineHeight:1}},
     e("div",{style:{
       fontFamily:"'Arial Black',Impact,sans-serif",
-      fontWeight:900, fontSize:18, color:C.text,
+      fontWeight:900, fontSize:18, color:"#fff",
       letterSpacing:"-0.02em", textTransform:"uppercase",
-      border:"2px solid "+C.text, padding:"2px 8px",
-      background:"#000"
+      border:"2px solid #fff", padding:"2px 8px",
+      background:"#1a1d23"
     }},"Bloom Voss Unit"),
     e("div",{style:{fontSize:8,color:C.dim,letterSpacing:"0.2em",textTransform:"uppercase",paddingLeft:2,marginTop:2}},"construcciones y reparaciones navales")
   );
@@ -457,8 +459,137 @@ function TaskModal({ task, onClose, onSave, onDelete, isNew, tok }) {
 }
 
 // ── GANTT ─────────────────────────────────────────────────────
-function GanttView({ tasks }) {
+function GanttBar({ task, wStart, wEnd, tok, onUpdate, saving }) {
+  const rowRef = useRef(null);
+  const dragRef = useRef(null);
+
+  const MS_PER_DAY = 86400000;
+
+  function getBarData() {
+    const tot = wEnd - wStart;
+    const s = task[fn("inicio")] ? new Date(task[fn("inicio")]) : null;
+    if (!s) return null;
+    const sDay = new Date(s); sDay.setHours(0,0,0,0);
+    const dur = task[fn("duracion")] ? parseInt(task[fn("duracion")]) : 1;
+    const finField = task[fn("fin")] ? new Date(task[fn("fin")]) : null;
+    const en = finField || new Date(sDay.getTime() + dur * MS_PER_DAY);
+    const eDay = new Date(en); eDay.setHours(23,59,59,999);
+    const left = Math.max(0, (sDay - wStart) / tot * 100);
+    const right = Math.min(100, (eDay - wStart) / tot * 100);
+    return { left, width: Math.max(1, right - left), sDay, eDay, dur };
+  }
+
+  function pxToDay(pxOffset, containerWidth) {
+    const totalMs = wEnd - wStart;
+    const ms = (pxOffset / containerWidth) * totalMs;
+    return Math.round(ms / MS_PER_DAY);
+  }
+
+  function startDrag(ev, mode) {
+    ev.preventDefault();
+    ev.stopPropagation();
+    const container = rowRef.current;
+    if (!container) return;
+    const rect = container.getBoundingClientRect();
+    const startX = ev.clientX;
+    const barData = getBarData();
+    if (!barData) return;
+
+    dragRef.current = { mode, startX, rect, barData };
+
+    function onMove(mv) {
+      if (!dragRef.current) return;
+      const { mode, startX, rect, barData } = dragRef.current;
+      const dx = mv.clientX - startX;
+      const daysDelta = Math.round((dx / rect.width) * 7);
+
+      let newStart = new Date(barData.sDay);
+      let newDur = barData.dur;
+
+      if (mode === "move") {
+        newStart = new Date(barData.sDay.getTime() + daysDelta * MS_PER_DAY);
+      } else if (mode === "resize") {
+        newDur = Math.max(1, barData.dur + daysDelta);
+      }
+
+      // Visual feedback only - actual save on mouseup
+      const el = container.querySelector(".gantt-bar");
+      if (el) {
+        const tot = wEnd - wStart;
+        const sDay = new Date(newStart); sDay.setHours(0,0,0,0);
+        const eDay = new Date(sDay.getTime() + newDur * MS_PER_DAY); eDay.setHours(23,59,59,999);
+        const left = Math.max(0, (sDay - wStart) / tot * 100);
+        const right = Math.min(100, (eDay - wStart) / tot * 100);
+        el.style.left = left + "%";
+        el.style.width = Math.max(1, right - left) + "%";
+      }
+      dragRef.current.newStart = newStart;
+      dragRef.current.newDur = newDur;
+    }
+
+    async function onUp() {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+      if (!dragRef.current) return;
+      const { newStart, newDur, mode } = dragRef.current;
+      if (newStart || newDur) {
+        const fields = {};
+        if (mode === "move" && newStart) {
+          const d = new Date(newStart); d.setHours(12,0,0,0);
+          fields.Iniciodetarea = d.toISOString();
+        }
+        if (mode === "resize" && newDur !== undefined) {
+          fields.Duraciondelatarea = newDur;
+          // Also clear fin date so duration drives the end
+          fields.Findetarea = null;
+        }
+        await onUpdate(task._id, fields);
+      }
+      dragRef.current = null;
+    }
+
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  }
+
+  const barData = getBarData();
+  const col = tipoColor[arrFirst(task[fn("tipo")])] || C.steel;
+  if (!barData) return e("div", {ref: rowRef, style:{position:"relative",height:32,background:C.border+"44",borderRadius:4}});
+
+  return e("div", {
+    ref: rowRef,
+    style: {position:"relative", height:32, background:C.border+"44", borderRadius:4, userSelect:"none"}
+  },
+    ...[1,2,3,4,5,6].map(i => e("div",{key:i,style:{position:"absolute",left:(i/7*100)+"%",top:0,bottom:0,width:1,background:C.border}})),
+    e("div", {
+      className: "gantt-bar",
+      style: {
+        position:"absolute", left:barData.left+"%", width:barData.width+"%",
+        top:3, bottom:3,
+        background: col+"cc", borderRadius:4, border:"1px solid "+col,
+        display:"flex", alignItems:"center", overflow:"hidden",
+        cursor: saving ? "wait" : "grab",
+        transition: dragRef.current ? "none" : "left 0.2s, width 0.2s"
+      },
+      onMouseDown: (ev) => startDrag(ev, "move")
+    },
+      e("span",{style:{fontSize:10,color:"#fff",fontWeight:700,whiteSpace:"nowrap",paddingLeft:6,flex:1,overflow:"hidden",textOverflow:"ellipsis"}},
+        arrFirst(task[fn("tipo")])||"", " · ", barData.dur+"d"
+      ),
+      // Resize handle
+      e("div",{
+        style:{width:8,height:"100%",cursor:"ew-resize",background:"rgba(0,0,0,0.2)",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center"},
+        onMouseDown:(ev)=>{ ev.stopPropagation(); startDrag(ev,"resize"); }
+      }, e("div",{style:{width:2,height:12,background:"rgba(255,255,255,0.7)",borderRadius:1}}))
+    )
+  );
+}
+
+function GanttView({ tasks, tok, onUpdateTask }) {
   const [off, setOff] = useState(0);
+  const [saving, setSaving] = useState(null);
+  const [toast, setToast] = useState("");
+
   const wStart = useMemo(()=>{ const d=new Date(); d.setDate(d.getDate()-d.getDay()+1+off*7); d.setHours(0,0,0,0); return d; },[off]);
   const days = Array.from({length:7},(_,i)=>{ const d=new Date(wStart); d.setDate(d.getDate()+i); return d; });
   const wEnd = new Date(days[6]); wEnd.setHours(23,59,59);
@@ -473,63 +604,71 @@ function GanttView({ tasks }) {
     return s<=wEnd && en>=wStart;
   });
 
-  // Group by barco
   const groups = {};
   visible.forEach(t=>{ const b=t[fn("buque")]||"Sin barco"; if(!groups[b])groups[b]=[]; groups[b].push(t); });
 
-  function bar(t) {
-    const tot = wEnd-wStart;
-    const s = new Date(t[fn("inicio")]);
-    // Snap start to beginning of that day
-    const sDay = new Date(s); sDay.setHours(0,0,0,0);
-    const dur = t[fn("duracion")] ? parseInt(t[fn("duracion")]) : 0;
-    const en = t[fn("fin")] ? new Date(t[fn("fin")]) : (dur>0 ? new Date(sDay.getTime()+dur*86400000) : new Date(sDay.getTime()+86400000));
-    // Snap end to end of that day
-    const eDay = new Date(en); eDay.setHours(23,59,59,999);
-    const left = Math.max(0,(sDay-wStart)/tot*100);
-    const right = Math.min(100,(eDay-wStart)/tot*100);
-    return {l:left+"%", w:Math.max(0.5,right-left)+"%"};
+  async function handleUpdate(itemId, fields) {
+    setSaving(itemId);
+    try {
+      await onUpdateTask(itemId, fields);
+      setToast("✓ Guardado");
+      setTimeout(()=>setToast(""),2000);
+    } catch(ex) {
+      setToast("Error: "+ex.message);
+      setTimeout(()=>setToast(""),3000);
+    }
+    setSaving(null);
   }
 
   return e("div",null,
-    e("div",{style:{display:"flex",alignItems:"center",gap:16,marginBottom:20}},
-      e("button",{onClick:()=>setOff(o=>o-1),style:{background:C.surfaceHigh,border:"1px solid "+C.border,color:C.text,padding:"6px 14px",borderRadius:6,cursor:"pointer"}},"← Anterior"),
+    e("div",{style:{display:"flex",alignItems:"center",gap:12,marginBottom:20}},
+      e("button",{onClick:()=>setOff(o=>o-1),style:{background:C.surface,border:"1px solid "+C.border,color:C.text,padding:"6px 14px",borderRadius:6,cursor:"pointer",fontWeight:500}},"← Anterior"),
       e("div",{style:{flex:1,textAlign:"center",fontWeight:700,color:C.text,fontSize:15}},"Semana del "+wLabel),
-      e("button",{onClick:()=>setOff(0),style:{background:C.surfaceHigh,border:"1px solid "+C.border,color:C.accent,padding:"6px 14px",borderRadius:6,cursor:"pointer"}},"Hoy"),
-      e("button",{onClick:()=>setOff(o=>o+1),style:{background:C.surfaceHigh,border:"1px solid "+C.border,color:C.text,padding:"6px 14px",borderRadius:6,cursor:"pointer"}},"Siguiente →")
+      toast&&e("span",{style:{fontSize:12,color:toast.startsWith("Error")?C.danger:C.success,fontWeight:700}},toast),
+      e("button",{onClick:()=>setOff(0),style:{background:C.accent,border:"none",color:"#000",padding:"6px 14px",borderRadius:6,cursor:"pointer",fontWeight:700}},"Hoy"),
+      e("button",{onClick:()=>setOff(o=>o+1),style:{background:C.surface,border:"1px solid "+C.border,color:C.text,padding:"6px 14px",borderRadius:6,cursor:"pointer",fontWeight:500}},"Siguiente →")
     ),
-    // Header
-    e("div",{style:{display:"grid",gridTemplateColumns:"280px 1fr",marginBottom:4}},
-      e("div",null),
+    e("div",{style:{fontSize:11,color:C.dim,marginBottom:8,padding:"6px 10px",background:C.surfaceHigh,borderRadius:6,border:"1px solid "+C.border}},
+      "💡 Arrastrá la barra para mover la fecha de inicio · Arrastrá el borde derecho ",e("strong",null,"▐")," para cambiar la duración"
+    ),
+    // Header days
+    e("div",{style:{display:"grid",gridTemplateColumns:"260px 1fr",marginBottom:4,borderBottom:"2px solid "+C.border,paddingBottom:4}},
+      e("div",{style:{fontSize:11,fontWeight:700,color:C.dim,textTransform:"uppercase",letterSpacing:"0.06em"}},"Tarea"),
       e("div",{style:{display:"grid",gridTemplateColumns:"repeat(7,1fr)"}},
-        ...days.map((d,i)=>{ const today=d.toDateString()===new Date().toDateString(); return e("div",{key:i,style:{textAlign:"center",fontSize:11,fontWeight:700,color:today?C.accent:C.dim,padding:"4px 0",background:today?C.accent+"18":"transparent",borderRadius:3}},dnames[i],e("br"),e("span",{style:{fontSize:13,color:today?C.accent:C.text}},d.getDate())); })
+        ...days.map((d,i)=>{
+          const today=d.toDateString()===new Date().toDateString();
+          return e("div",{key:i,style:{textAlign:"center",fontSize:11,fontWeight:700,color:today?C.accent:C.dim,padding:"2px 0",background:today?C.accent+"18":"transparent",borderRadius:3}},
+            dnames[i],e("br"),e("span",{style:{fontSize:13,fontWeight:700,color:today?C.accent:C.text}},d.getDate())
+          );
+        })
       )
     ),
     Object.keys(groups).length===0
-      ? e("div",{style:{padding:40,textAlign:"center",color:C.dim}},"No hay tareas con fecha de inicio para esta semana.",e("br"),e("span",{style:{fontSize:12}},"El fin se calcula automáticamente con días estimados si no hay fecha de fin."))
-      : Object.entries(groups).map(([buque,list])=>e("div",{key:buque,style:{marginBottom:18}},
-          // Barco header
-          e("div",{style:{fontSize:11,fontWeight:800,color:buqueColor[buque]||C.accent,textTransform:"uppercase",letterSpacing:"0.1em",marginBottom:6,paddingLeft:8,borderLeft:"3px solid "+(buqueColor[buque]||C.accent)}},buque),
-          ...list.map(t=>{ const {l,w}=bar(t); const col=tipoColor[arrFirst(t[fn("tipo")])]||C.steel;
-            return e("div",{key:t._id,style:{display:"grid",gridTemplateColumns:"280px 1fr",alignItems:"center",marginBottom:5,minHeight:36}},
-              e("div",{style:{fontSize:12,color:C.text,paddingRight:12,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",lineHeight:"1.3"},title:t.Title},
-                t.Title,
-                t[fn("duracion")]&&e("span",{style:{fontSize:10,color:C.dim,marginLeft:5}},"("+t[fn("duracion")]+"d)")
-              ),
-              e("div",{style:{position:"relative",height:28,background:C.border+"33",borderRadius:4}},
-                // Day dividers at left edge of each day
-                ...[1,2,3,4,5,6].map(i=>e("div",{key:i,style:{position:"absolute",left:(i/7*100)+"%",top:0,bottom:0,width:1,background:C.border+"88"}})),
-                e("div",{style:{position:"absolute",left:l,width:w,top:2,bottom:2,background:col+"dd",borderRadius:3,border:"1px solid "+col,display:"flex",alignItems:"center",paddingLeft:6,overflow:"hidden"}},
-                  e("span",{style:{fontSize:10,color:"#fff",fontWeight:700,whiteSpace:"nowrap"}},arrFirst(t[fn("tipo")])||"")
-                )
-              )
-            );
-          })
+      ? e("div",{style:{padding:40,textAlign:"center",color:C.dim}},
+          "No hay tareas con fecha de inicio para esta semana.",
+          e("br"),e("span",{style:{fontSize:12}},"Editá las tareas y completá la fecha de Inicio.")
+        )
+      : Object.entries(groups).map(([buque,list])=>e("div",{key:buque,style:{marginBottom:20}},
+          e("div",{style:{
+            fontSize:11,fontWeight:800,color:buqueColor[buque]||C.accent,
+            textTransform:"uppercase",letterSpacing:"0.1em",
+            marginBottom:6,padding:"4px 8px",
+            borderLeft:"3px solid "+(buqueColor[buque]||C.accent),
+            background:(buqueColor[buque]||C.accent)+"12",borderRadius:"0 4px 4px 0"
+          }},buque),
+          ...list.map(t=>e("div",{key:t._id,style:{display:"grid",gridTemplateColumns:"260px 1fr",alignItems:"center",marginBottom:4,minHeight:38}},
+            e("div",{style:{fontSize:12,color:C.text,paddingRight:12,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",lineHeight:"1.3"},title:t.Title},
+              t.Title,
+              t[fn("duracion")]&&e("span",{style:{fontSize:10,color:C.dim,marginLeft:5,background:C.surfaceHigh,border:"1px solid "+C.border,padding:"1px 5px",borderRadius:3}},t[fn("duracion")]+"d")
+            ),
+            e(GanttBar,{task:t,wStart,wEnd,tok,onUpdate:handleUpdate,saving:saving===t._id})
+          ))
         )),
-    // Legend tipos
     e("div",{style:{marginTop:20,display:"flex",gap:14,flexWrap:"wrap",paddingTop:12,borderTop:"1px solid "+C.border}},
-      e("span",{style:{fontSize:11,color:C.dim,fontWeight:700,marginRight:4}},"Colores por tipo:"),
-      ...Object.entries(tipoColor).map(([t,c])=>e("div",{key:t,style:{display:"flex",alignItems:"center",gap:4,fontSize:11,color:C.dim}},e("div",{style:{width:12,height:12,background:c,borderRadius:2}}),t))
+      e("span",{style:{fontSize:11,color:C.dim,fontWeight:700,marginRight:4}},"Tipos:"),
+      ...Object.entries(tipoColor).map(([t,c])=>e("div",{key:t,style:{display:"flex",alignItems:"center",gap:4,fontSize:11,color:C.dim}},
+        e("div",{style:{width:10,height:10,background:c,borderRadius:2}}),t
+      ))
     )
   );
 }
@@ -553,7 +692,7 @@ function App() {
   const [newT, setNewT] = useState(false);
   const [ok, setOk] = useState("");
 
-useEffect(()=>{
+  useEffect(()=>{
     const account = msalInstance.getAccount();
     if (account) {
       setUserName(account.name||account.userName||"");
@@ -575,7 +714,7 @@ useEffect(()=>{
 
   async function fullConnect(t) { setLoading(true); setErr(""); try{ setItems(await getItems(t)); }catch(ex){ setErr(ex.message); }finally{setLoading(false);} }
   async function connect(t) { setTok(t); await fullConnect(t); }
- async function logout() {
+  async function logout() {
     msalInstance.logout();
     setTok(""); setItems([]); setUserName("");
   }
@@ -866,7 +1005,10 @@ useEffect(()=>{
 
       // ── GANTT
       tab==="gantt"&&e("div",{style:{background:C.surface,border:"1px solid "+C.border,borderRadius:8,padding:24}},
-        e(GanttView,{tasks:filtered})
+        e(GanttView,{tasks:filtered,tok,onUpdateTask:async(itemId,fields)=>{
+          await gPatch(tok,BASE+"/items/"+itemId+"/fields",fields);
+          await refresh();
+        }})
       ),
 
       // ── INSUMOS
