@@ -472,7 +472,7 @@ function GanttBar({ task, wStart, wEnd, tok, onUpdate, saving }) {
     const sDay = new Date(s); sDay.setHours(0,0,0,0);
     const dur = task[fn("duracion")] ? parseInt(task[fn("duracion")]) : 1;
     const finField = task[fn("fin")] ? new Date(task[fn("fin")]) : null;
-    const en = finField || new Date(sDay.getTime() + dur * MS_PER_DAY);
+    const en = finField || new Date(sDay.getTime() + (dur - 1) * MS_PER_DAY);
     const eDay = new Date(en); eDay.setHours(23,59,59,999);
     const left = Math.max(0, (sDay - wStart) / tot * 100);
     const right = Math.min(100, (eDay - wStart) / tot * 100);
