@@ -39,13 +39,12 @@ const msalInstance = new Msal.UserAgentApplication(MSAL_CONFIG);
 const SCOPES = ["User.Read","Sites.ReadWrite.All","Files.ReadWrite.All"];
 
 async function getToken() {
-  const accounts = msalInstance.getAllAccounts();
-  if (accounts.length === 0) throw new Error("No hay sesión activa");
+  const account = msalInstance.getAccount();
+  if (!account) throw new Error("No hay sesión activa");
   try {
-    const result = await msalInstance.acquireTokenSilent({ scopes:SCOPES, account:accounts[0] });
+    const result = await msalInstance.acquireTokenSilent({ scopes:SCOPES });
     return result.accessToken;
   } catch(ex) {
-    // Silent failed, try popup
     const result = await msalInstance.acquireTokenPopup({ scopes:SCOPES });
     return result.accessToken;
   }
