@@ -39,14 +39,18 @@ const msalInstance = new Msal.UserAgentApplication(MSAL_CONFIG);
 const SCOPES = ["User.Read","Sites.ReadWrite.All","Files.ReadWrite.All"];
 
 async function getToken() {
-  const account = msalInstance.getAccount();
-  if (!account) throw new Error("No hay sesión activa");
   try {
+    // Always try silent first - this refreshes if expired
     const result = await msalInstance.acquireTokenSilent({ scopes:SCOPES });
     return result.accessToken;
   } catch(ex) {
-    const result = await msalInstance.acquireTokenPopup({ scopes:SCOPES });
-    return result.accessToken;
+    // Silent failed (expired or no session), try popup
+    try {
+      const result = await msalInstance.acquireTokenPopup({ scopes:SCOPES });
+      return result.accessToken;
+    } catch(ex2) {
+      throw new Error("No hay sesión activa. Por favor iniciá sesión nuevamente.");
+    }
   }
 }
 
@@ -93,17 +97,33 @@ async function gGet(tok, url) {
   return r.json();
 }
 async function gPatch(tok, url, body) {
-  const r = await fetch("https://graph.microsoft.com/v1.0"+url, { method:"PATCH", headers:{ Authorization:"Bearer "+tok, "Content-Type":"application/json" }, body:JSON.stringify(body) });
+  // Try with current token, if 401 refresh and retry once
+  let t = tok;
+  let r = await fetch("https://graph.microsoft.com/v1.0"+url, { method:"PATCH", headers:{ Authorization:"Bearer "+t, "Content-Type":"application/json" }, body:JSON.stringify(body) });
+  if (r.status === 401) {
+    t = await getToken();
+    r = await fetch("https://graph.microsoft.com/v1.0"+url, { method:"PATCH", headers:{ Authorization:"Bearer "+t, "Content-Type":"application/json" }, body:JSON.stringify(body) });
+  }
   if (!r.ok) throw new Error("Error "+r.status+": "+(await r.text()).substring(0,400));
   return r.json();
 }
 async function gPost(tok, url, body) {
-  const r = await fetch("https://graph.microsoft.com/v1.0"+url, { method:"POST", headers:{ Authorization:"Bearer "+tok, "Content-Type":"application/json" }, body:JSON.stringify(body) });
+  let t = tok;
+  let r = await fetch("https://graph.microsoft.com/v1.0"+url, { method:"POST", headers:{ Authorization:"Bearer "+t, "Content-Type":"application/json" }, body:JSON.stringify(body) });
+  if (r.status === 401) {
+    t = await getToken();
+    r = await fetch("https://graph.microsoft.com/v1.0"+url, { method:"POST", headers:{ Authorization:"Bearer "+t, "Content-Type":"application/json" }, body:JSON.stringify(body) });
+  }
   if (!r.ok) throw new Error("Error "+r.status+": "+(await r.text()).substring(0,400));
   return r.json();
 }
 async function gDelete(tok, url) {
-  const r = await fetch("https://graph.microsoft.com/v1.0"+url, { method:"DELETE", headers:{ Authorization:"Bearer "+tok } });
+  let t = tok;
+  let r = await fetch("https://graph.microsoft.com/v1.0"+url, { method:"DELETE", headers:{ Authorization:"Bearer "+t } });
+  if (r.status === 401) {
+    t = await getToken();
+    r = await fetch("https://graph.microsoft.com/v1.0"+url, { method:"DELETE", headers:{ Authorization:"Bearer "+t } });
+  }
   if (!r.ok) throw new Error("Error "+r.status);
 }
 async function getItems(tok) {
