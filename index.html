@@ -1,4 +1,6 @@
 
+
+
 <!DOCTYPE html>
 <html lang="es">
 <head>
@@ -337,106 +339,6 @@ async function printTask(task, photos, tok) {
   </div>
   <sc`+"ript>setTimeout(()=>{ window.print(); }, 400);</sc"+"ript></body></html>");
   win.document.close();
-}
-
-// ── TASK VIEW (READ-ONLY) ───────────────────────────────────────
-function TaskViewModal({ task, onClose, tok }) {
-  const [photos, setPhotos] = useState([]);
-  const [loadingPhotos, setLoadingPhotos] = useState(false);
-  const [printing, setPrinting] = useState(false);
-  const [lightbox, setLightbox] = useState(null);
-
-  useEffect(()=>{ loadPhotos(); },[]);
-
-  async function loadPhotos() {
-    const buque = task[fn("buque")];
-    const itemId = task.ID || task.id;
-    if (!buque||!itemId) return;
-    setLoadingPhotos(true);
-    try {
-      const d = await gGet(tok, "/me/drive/root:/Fotos_Astillero/"+encodeURIComponent(buque)+":/children?$select=name,id,webUrl&$top=200");
-      const prefix = String(itemId)+"_";
-      setPhotos((d.value||[]).filter(f=>f.name.startsWith(prefix)));
-    } catch(ex){ console.log("Fotos:", ex.message); }
-    finally { setLoadingPhotos(false); }
-  }
-
-  async function handlePrint() {
-    setPrinting(true);
-    try { await printTask(task, photos, tok); }
-    finally { setPrinting(false); }
-  }
-
-  const est = getEstado(task);
-  const tipo = arrFirst(task[fn("tipo")]);
-  const buque = task[fn("buque")];
-  const col = tipoColor[tipo] || C.steel;
-  const bCol = buqueColor[buque] || C.steel;
-
-  const field = (label, value) => e("div",{style:{background:C.surfaceHigh,borderRadius:6,padding:"10px 14px",border:"1px solid "+C.border}},
-    e("div",{style:{fontSize:9,textTransform:"uppercase",letterSpacing:"0.06em",color:C.dim,marginBottom:3}},label),
-    e("div",{style:{fontSize:14,fontWeight:600,color:C.text}},value||"—")
-  );
-
-  return e("div",{style:{position:"fixed",inset:0,background:"#000b",zIndex:1000,display:"flex",alignItems:"center",justifyContent:"center"},onClick:ev=>ev.target===ev.currentTarget&&onClose()},
-    e("div",{style:{background:C.surface,border:"1px solid "+C.border,borderRadius:12,width:680,maxHeight:"93vh",overflow:"auto",padding:32}},
-      e("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:6}},
-        e("div",null,
-          e("div",{style:{fontSize:9,color:C.dim,textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:4}},"👁 Vista de solo lectura"),
-          e("div",{style:{fontSize:18,fontWeight:800,color:C.text}},task.Title)
-        ),
-        e("div",{style:{display:"flex",gap:8,alignItems:"center"}},
-          e("button",{onClick:handlePrint,disabled:printing,style:{background:"#2a3045",border:"1px solid "+C.border,color:"#fff",padding:"6px 14px",borderRadius:6,cursor:printing?"wait":"pointer",fontSize:12}},printing?"⏳ Preparando...":"🖨 Imprimir / PDF"),
-          e("button",{onClick:onClose,style:{background:"none",border:"none",color:C.dim,fontSize:20,cursor:"pointer"}},"✕")
-        )
-      ),
-      e("div",{style:{display:"flex",gap:8,marginBottom:20}},
-        e("span",{style:{background:bCol+"18",color:bCol,border:"1px solid "+bCol,borderRadius:5,padding:"3px 10px",fontSize:12,fontWeight:700}},"🚢 "+(buque||"—")),
-        e("span",{style:{background:col+"18",color:col,border:"1px solid "+col,borderRadius:5,padding:"3px 10px",fontSize:12,fontWeight:700}},tipo||"—"),
-        e("span",{style:{background:statBg[est]||C.surfaceHigh,color:statColor[est]||C.dim,borderRadius:5,padding:"3px 10px",fontSize:12,fontWeight:700}},est||"—")
-      ),
-      e("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:16}},
-        field("Sección del buque", task[fn("seccion")]),
-        field("Duración estimada", task[fn("duracion")]?task[fn("duracion")]+" días":null),
-        field("Inicio de tarea", fmtDate(task[fn("inicio")])),
-        field("Fin de tarea", fmtDate(task[fn("fin")])),
-        field("Duración real", task[fn("durReal")]?task[fn("durReal")]+" días":null),
-        field("Monto de insumos", parseMonto(task[fn("monto")])>0?fmt(task[fn("monto")]):null)
-      ),
-      task[fn("insumos")]&&e("div",{style:{marginBottom:16}},
-        e("div",{style:{fontSize:11,fontWeight:700,color:C.dim,textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:6}},"Insumos requeridos"),
-        e("div",{style:{background:C.surfaceHigh,borderRadius:6,padding:"10px 14px",border:"1px solid "+C.border,fontSize:13,whiteSpace:"pre-wrap",color:C.text}},task[fn("insumos")])
-      ),
-      task[fn("comentarios")]&&e("div",{style:{marginBottom:16}},
-        e("div",{style:{fontSize:11,fontWeight:700,color:C.dim,textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:6}},"Comentarios generales"),
-        e("div",{style:{background:C.surfaceHigh,borderRadius:6,padding:"10px 14px",border:"1px solid "+C.border,fontSize:13,whiteSpace:"pre-wrap",color:C.text}},task[fn("comentarios")])
-      ),
-      e("div",{style:{borderTop:"1px solid "+C.border,paddingTop:16}},
-        e("div",{style:{fontSize:12,fontWeight:700,color:C.dim,textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:12}},"📷 Fotos de la tarea"),
-        loadingPhotos&&e("div",{style:{color:C.dim,fontSize:13}},"Cargando fotos..."),
-        !loadingPhotos&&photos.length===0&&e("div",{style:{color:C.dim,fontSize:13}},"No hay fotos para esta tarea."),
-        photos.length>0&&e("div",{style:{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(130px,1fr))",gap:8}},
-          ...photos.map(p=>e("div",{key:p.id,style:{cursor:"pointer"},onClick:()=>setLightbox(p.webUrl)},
-            e("div",{style:{width:"100%",paddingBottom:"75%",background:C.surfaceHigh,borderRadius:6,border:"1px solid "+C.border,overflow:"hidden",position:"relative"}},
-              e("img",{src:"https://graph.microsoft.com/v1.0/me/drive/items/"+p.id+"/content",alt:p.name,
-                onError:ev=>{ev.target.style.display="none";},
-                style:{position:"absolute",inset:0,width:"100%",height:"100%",objectFit:"cover"}})
-            ),
-            e("div",{style:{fontSize:10,color:C.dim,marginTop:4,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},p.name.replace(/^\d+_/,"").replace(/\.[^.]+$/,""))
-          ))
-        )
-      ),
-      lightbox&&e("div",{style:{position:"fixed",inset:0,background:"#000d",zIndex:2000,display:"flex",alignItems:"center",justifyContent:"center"},onClick:()=>setLightbox(null)},
-        e("div",{style:{position:"relative",maxWidth:"90vw",maxHeight:"90vh"}},
-          e("img",{src:lightbox,style:{maxWidth:"90vw",maxHeight:"85vh",objectFit:"contain",borderRadius:8}}),
-          e("button",{onClick:()=>setLightbox(null),style:{position:"absolute",top:-16,right:-16,background:C.danger,border:"none",borderRadius:"50%",width:32,height:32,color:"#fff",fontSize:18,cursor:"pointer",lineHeight:"32px",textAlign:"center"}},"✕")
-        )
-      ),
-      e("div",{style:{display:"flex",justifyContent:"flex-end",marginTop:24}},
-        e("button",{onClick:onClose,style:{padding:"10px 24px",background:C.surfaceHigh,border:"1px solid "+C.border,borderRadius:6,color:C.text,cursor:"pointer",fontWeight:600}},"Cerrar")
-      )
-    )
-  );
 }
 
 // ── TASK MODAL ────────────────────────────────────────────────
@@ -900,7 +802,7 @@ function TramosModal({ task, tramos, onClose, onSave }) {
   );
 }
 
-function GanttView({ tasks, tok, onUpdateTask, onViewTask }) {
+function GanttView({ tasks, tok, onUpdateTask }) {
   const [off, setOff] = useState(0);
   const [saving, setSaving] = useState(null);
   const [toast, setToast] = useState("");
@@ -995,13 +897,7 @@ function GanttView({ tasks, tok, onUpdateTask, onViewTask }) {
             background:(buqueColor[buque]||C.accent)+"12",borderRadius:"0 4px 4px 0"
           }},buque),
           ...list.map(t=>e("div",{key:t._id,style:{display:"grid",gridTemplateColumns:"260px 1fr",alignItems:"center",marginBottom:4,minHeight:38}},
-            e("div",{
-              style:{fontSize:12,color:C.text,paddingRight:12,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",lineHeight:"1.3",cursor:"pointer"},
-              title:"Ver detalle de la tarea — "+t.Title,
-              onClick:()=>onViewTask(t),
-              onMouseEnter:ev=>{ev.currentTarget.style.color=C.accent;ev.currentTarget.style.textDecoration="underline";},
-              onMouseLeave:ev=>{ev.currentTarget.style.color=C.text;ev.currentTarget.style.textDecoration="none";}
-            },
+            e("div",{style:{fontSize:12,color:C.text,paddingRight:12,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",lineHeight:"1.3"},title:t.Title},
               t.Title,
               t[fn("duracion")]&&e("span",{style:{fontSize:10,color:C.dim,marginLeft:5,background:C.surfaceHigh,border:"1px solid "+C.border,padding:"1px 5px",borderRadius:3}},t[fn("duracion")]+"d")
             ),
@@ -1035,7 +931,6 @@ function App() {
   const [q, setQ] = useState("");
   const [editT, setEditT] = useState(null);
   const [newT, setNewT] = useState(false);
-  const [viewT, setViewT] = useState(null);
   const [ok, setOk] = useState("");
   const [kpiDetail, setKpiDetail] = useState(null); // {title, items}
 
@@ -1343,13 +1238,7 @@ function App() {
                 const tipo=arrFirst(item[fn("tipo")]);
                 return e("tr",{key:item._id,style:{borderBottom:"1px solid "+C.border+"22",background:idx%2===0?"transparent":C.surfaceHigh+"44"}},
                   e("td",{style:{padding:"10px 14px",minWidth:260,maxWidth:340}},
-                    e("div",{
-                      onClick:()=>setViewT(item),
-                      style:{fontWeight:600,fontSize:13,color:C.text,cursor:"pointer"},
-                      onMouseEnter:ev=>{ev.currentTarget.style.color=C.accent;ev.currentTarget.style.textDecoration="underline";},
-                      onMouseLeave:ev=>{ev.currentTarget.style.color=C.text;ev.currentTarget.style.textDecoration="none";},
-                      title:"Ver detalle de la tarea"
-                    },item.Title),
+                    e("div",{style:{fontWeight:600,fontSize:13}},item.Title),
                     item[fn("comentarios")]&&e("div",{style:{fontSize:11,color:C.dim,marginTop:2,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",maxWidth:300}},item[fn("comentarios")])
                   ),
                   e("td",{style:{padding:"10px 14px"}},e("span",{style:{fontSize:13,fontWeight:700,color:buqueColor[item[fn("buque")]]||C.steel}},item[fn("buque")]||"—")),
@@ -1377,7 +1266,7 @@ function App() {
       tab==="gantt"&&e("div",null,
         e(FilterBar,{showSearch:true}),
         e("div",{style:{background:C.surface,border:"1px solid "+C.border,borderRadius:8,padding:24}},
-          e(GanttView,{tasks:filtered,tok,onViewTask:(t)=>setViewT(t),onUpdateTask:async(itemId,fields)=>{
+          e(GanttView,{tasks:filtered,tok,onUpdateTask:async(itemId,fields)=>{
             await gPatch(tok,BASE+"/items/"+itemId+"/fields",fields);
             await refresh();
           }})
@@ -1460,8 +1349,7 @@ function App() {
 
     editT&&e(TaskModal,{task:editT,onClose:()=>setEditT(null),onSave:saveTask,onDelete:deleteTask,tok}),
     newT&&e(TaskModal,{task:null,onClose:()=>setNewT(false),onSave:saveTask,isNew:true,tok}),
-    viewT&&e(TaskViewModal,{task:viewT,onClose:()=>setViewT(null),tok}),
-    kpiDetail&&e(KpiDetailModal,{title:kpiDetail.title,items:kpiDetail.items,onClose:()=>setKpiDetail(null),onEditTask:(t)=>setViewT(t)})
+    kpiDetail&&e(KpiDetailModal,{title:kpiDetail.title,items:kpiDetail.items,onClose:()=>setKpiDetail(null),onEditTask:(t)=>setEditT(t)})
   );
 }
 
