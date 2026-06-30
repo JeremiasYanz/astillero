@@ -79,7 +79,26 @@ const FIELDS = {
   fin:         { name:"Findetarea",                type:"date" },
   durReal:     { name:"Duraci_x00f3_nreal",        type:"number" },
   comentarios: { name:"Comentariosgenerales",      type:"textarea" },
+  tramos:      { name:"Tramos",                    type:"textarea" },
 };
+
+// ── TRAMOS (multiple work periods per task) ────────────────────
+// Stored as JSON string: [{"inicio":"2026-06-22","dias":3},{"inicio":"2026-06-29","dias":2}]
+function parseTramos(task) {
+  const raw = task[fn("tramos")];
+  if (!raw) return null;
+  try {
+    const arr = JSON.parse(raw);
+    if (Array.isArray(arr) && arr.length > 0) return arr;
+  } catch(ex) {}
+  return null;
+}
+function tramosTotalDias(tramos) {
+  return tramos.reduce((s,t)=>s+(parseInt(t.dias)||0),0);
+}
+function saveTramosField(tramos) {
+  return JSON.stringify(tramos);
+}
 
 const fn = k => FIELDS[k].name;
 const arr = v => Array.isArray(v) ? v : (v ? [v] : []);
@@ -377,6 +396,36 @@ function TaskModal({ task, onClose, onSave, onDelete, isNew, tok }) {
     finally { setUploading(false); ev.target.value=""; }
   }
 
+  const [renamingId, setRenamingId] = useState(null);
+  const [renameVal, setRenameVal] = useState("");
+
+  function startRename(p) {
+    // Strip "{id}_" prefix and extension for editing
+    const itemId = task.ID||task.id;
+    const prefix = String(itemId)+"_";
+    let base = p.name.startsWith(prefix) ? p.name.substring(prefix.length) : p.name;
+    const extMatch = base.match(/\.[^.]+$/);
+    const ext = extMatch ? extMatch[0] : "";
+    const nameOnly = ext ? base.substring(0, base.length-ext.length) : base;
+    setRenamingId(p.id);
+    setRenameVal(nameOnly);
+  }
+
+  async function confirmRename(p) {
+    const itemId = task.ID||task.id;
+    const prefix = String(itemId)+"_";
+    const extMatch = p.name.match(/\.[^.]+$/);
+    const ext = extMatch ? extMatch[0] : "";
+    const cleanComment = renameVal.trim().replace(/[\\/:*?"<>|]/g,"-").substring(0,80);
+    const newName = prefix + (cleanComment || "foto") + ext;
+    setRenamingId(null);
+    if (newName === p.name) return;
+    try {
+      await gPatch(tok, "/me/drive/items/"+p.id, { name: newName });
+      await loadPhotos();
+    } catch(ex) { alert("Error al renombrar: "+ex.message); }
+  }
+
   const set = (k,v) => setForm(f=>({...f,[k]:v}));
   const st = {width:"100%",background:C.bg,border:"1px solid "+C.border,borderRadius:6,color:C.text,padding:"8px 10px",fontSize:13,outline:"none"};
 
@@ -431,7 +480,7 @@ function TaskModal({ task, onClose, onSave, onDelete, isNew, tok }) {
       // Photos section
       !isNew && e("div",{style:{marginTop:24,borderTop:"1px solid "+C.border,paddingTop:20}},
         e("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}},
-          e("div",{style:{fontSize:12,fontWeight:700,color:C.dim,textTransform:"uppercase",letterSpacing:"0.08em"}},"📷 Fotos de la tarea"),
+          e("div",{style:{fontSize:12,fontWeight:700,color:C.dim,textTransform:"uppercase",letterSpacing:"0.08em"}},"📷 Fotos de la tarea ",e("span",{style:{fontWeight:400,textTransform:"none",fontSize:10}},"(click en el nombre para comentar)")),
           e("div",{style:{display:"flex",gap:8}},
             e("button",{onClick:()=>fileRef.current&&fileRef.current.click(),disabled:uploading,style:{background:C.accent,border:"none",borderRadius:6,color:"#000",fontWeight:700,padding:"6px 14px",cursor:"pointer",fontSize:12}},uploading?"Subiendo...":"📤 Subir fotos"),
             e("input",{ref:fileRef,type:"file",accept:"image/*",multiple:true,style:{display:"none"},onChange:handleUpload})
@@ -439,14 +488,31 @@ function TaskModal({ task, onClose, onSave, onDelete, isNew, tok }) {
         ),
         loadingPhotos&&e("div",{style:{color:C.dim,fontSize:13}},"Cargando fotos..."),
         !loadingPhotos&&photos.length===0&&e("div",{style:{color:C.dim,fontSize:13}},"No hay fotos para esta tarea."),
-        photos.length>0&&e("div",{style:{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(130px,1fr))",gap:8}},
-          ...photos.map(p=>e("div",{key:p.id,style:{cursor:"pointer"},onClick:()=>setLightbox(p.webUrl)},
-            e("div",{style:{width:"100%",paddingBottom:"75%",background:C.surfaceHigh,borderRadius:6,border:"1px solid "+C.border,overflow:"hidden",position:"relative"}},
+        photos.length>0&&e("div",{style:{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(140px,1fr))",gap:8}},
+          ...photos.map(p=>e("div",{key:p.id,style:{}},
+            e("div",{style:{width:"100%",paddingBottom:"75%",background:C.surfaceHigh,borderRadius:6,border:"1px solid "+C.border,overflow:"hidden",position:"relative",cursor:"pointer"},onClick:()=>setLightbox(p.webUrl)},
               e("img",{src:"https://graph.microsoft.com/v1.0/me/drive/items/"+p.id+"/content",alt:p.name,
                 onError:ev=>{ev.target.style.display="none";},
                 style:{position:"absolute",inset:0,width:"100%",height:"100%",objectFit:"cover"}})
             ),
-            e("div",{style:{fontSize:10,color:C.dim,marginTop:4,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},p.name.replace(/^\d+_/,""))
+            renamingId===p.id
+              ? e("div",{style:{display:"flex",gap:3,marginTop:4}},
+                  e("input",{
+                    autoFocus:true, value:renameVal, onChange:ev=>setRenameVal(ev.target.value),
+                    onKeyDown:ev=>{ if(ev.key==="Enter") confirmRename(p); if(ev.key==="Escape") setRenamingId(null); },
+                    placeholder:"Describí la foto...",
+                    style:{flex:1,fontSize:10,padding:"3px 5px",border:"1px solid "+C.accent,borderRadius:3,outline:"none",minWidth:0}
+                  }),
+                  e("button",{onClick:()=>confirmRename(p),style:{fontSize:10,background:C.accent,border:"none",borderRadius:3,padding:"2px 6px",cursor:"pointer",fontWeight:700}},"✓")
+                )
+              : e("div",{
+                  style:{fontSize:10,color:C.dim,marginTop:4,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",cursor:"pointer",display:"flex",alignItems:"center",gap:3},
+                  onClick:()=>startRename(p),
+                  title:"Click para agregar/editar comentario"
+                },
+                  e("span",{style:{flex:1,overflow:"hidden",textOverflow:"ellipsis"}},p.name.replace(/^\d+_/,"").replace(/\.[^.]+$/,"")||"Sin descripción"),
+                  e("span",{style:{fontSize:9,opacity:0.6}},"✏️")
+                )
           ))
         ),
         lightbox&&e("div",{style:{position:"fixed",inset:0,background:"#000d",zIndex:2000,display:"flex",alignItems:"center",justifyContent:"center"},onClick:()=>setLightbox(null)},
@@ -477,70 +543,125 @@ function TaskModal({ task, onClose, onSave, onDelete, isNew, tok }) {
   );
 }
 
+// ── KPI DETAIL MODAL ─────────────────────────────────────────
+function KpiDetailModal({ title, items, onClose, onEditTask }) {
+  return e("div",{style:{position:"fixed",inset:0,background:"#000a",zIndex:1050,display:"flex",alignItems:"center",justifyContent:"center"},onClick:ev=>ev.target===ev.currentTarget&&onClose()},
+    e("div",{style:{background:C.surface,border:"1px solid "+C.border,borderRadius:12,width:620,maxHeight:"80vh",overflow:"auto",padding:28}},
+      e("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:18}},
+        e("div",null,
+          e("div",{style:{fontSize:16,fontWeight:800,color:C.text}},title),
+          e("div",{style:{fontSize:12,color:C.dim,marginTop:2}},items.length+" tarea"+(items.length!==1?"s":""))
+        ),
+        e("button",{onClick:onClose,style:{background:"none",border:"none",color:C.dim,fontSize:20,cursor:"pointer"}},"✕")
+      ),
+      items.length===0
+        ? e("div",{style:{padding:30,textAlign:"center",color:C.dim}},"No hay tareas en esta categoría.")
+        : e("div",null,
+            ...items.map(i=>e("div",{
+              key:i._id,
+              onClick:()=>{ onEditTask(i); onClose(); },
+              style:{padding:"10px 14px",borderBottom:"1px solid "+C.border,cursor:"pointer",display:"flex",justifyContent:"space-between",alignItems:"center"}
+            },
+              e("div",null,
+                e("div",{style:{fontSize:13,fontWeight:600,color:C.text}},i.Title),
+                e("div",{style:{fontSize:11,color:C.dim,marginTop:2}},
+                  e("span",{style:{color:buqueColor[i[fn("buque")]]||C.steel,fontWeight:600}},i[fn("buque")]||"—")," · ",
+                  arrFirst(i[fn("tipo")])||"—"," · ",getEstado(i)||"—"
+                )
+              ),
+              parseMonto(i[fn("monto")])>0&&e("div",{style:{fontFamily:"monospace",fontSize:12,color:C.accent,whiteSpace:"nowrap",marginLeft:10}},fmt(i[fn("monto")]))
+            ))
+          )
+    )
+  );
+}
+
 // ── GANTT ─────────────────────────────────────────────────────
-function GanttBar({ task, wStart, wEnd, tok, onUpdate, saving }) {
+// Work week: Monday(0)-Friday(4). 5 columns only, no weekends.
+function GanttSegment({ task, segIdx, tramo, wStart, wDays, tok, onUpdate, saving, isOnlySegment }) {
   const rowRef = useRef(null);
   const dragRef = useRef(null);
-
   const MS_PER_DAY = 86400000;
+  const nCols = wDays.length;
 
-  function getBarData() {
-    const tot = wEnd - wStart;
-    const s = task[fn("inicio")] ? new Date(task[fn("inicio")]) : null;
-    if (!s) return null;
-    const sDay = new Date(s); sDay.setHours(0,0,0,0);
-    const dur = task[fn("duracion")] ? parseInt(task[fn("duracion")]) : 1;
-    const finField = task[fn("fin")] ? new Date(task[fn("fin")]) : null;
-    const en = finField || new Date(sDay.getTime() + (dur - 1) * MS_PER_DAY);
-    const eDay = new Date(en); eDay.setHours(23,59,59,999);
-    const left = Math.max(0, (sDay - wStart) / tot * 100);
-    const right = Math.min(100, (eDay - wStart) / tot * 100);
-    return { left, width: Math.max(1, right - left), sDay, eDay, dur };
+  // Map a real calendar date to a work-week column index (0..nCols-1), skipping weekends
+  function dateToCol(d) {
+    for (let i=0;i<wDays.length;i++){
+      if (wDays[i].toDateString()===d.toDateString()) return i;
+    }
+    return null;
   }
 
-  function pxToDay(pxOffset, containerWidth) {
-    const totalMs = wEnd - wStart;
-    const ms = (pxOffset / containerWidth) * totalMs;
-    return Math.round(ms / MS_PER_DAY);
+  function getSegData() {
+    const s = new Date(tramo.inicio+"T00:00:00");
+    const dur = parseInt(tramo.dias)||1;
+    // Build list of work days covered by this tramo (skip weekends within the span)
+    let cursor = new Date(s);
+    let count = 0;
+    let lastDay = new Date(s);
+    while (count < dur) {
+      const dow = cursor.getDay();
+      if (dow !== 0 && dow !== 6) { count++; lastDay = new Date(cursor); }
+      if (count < dur) cursor = new Date(cursor.getTime()+MS_PER_DAY);
+    }
+    const startCol = dateToCol(s);
+    const endCol = dateToCol(lastDay);
+    // If segment starts before this week or ends after, clip
+    const visStart = startCol===null ? (s < wDays[0] ? 0 : null) : startCol;
+    const visEnd = endCol===null ? (lastDay > wDays[nCols-1] ? nCols-1 : null) : endCol;
+    if (visStart===null || visEnd===null) return null;
+    const left = (visStart/nCols)*100;
+    const width = ((visEnd-visStart+1)/nCols)*100;
+    return { left, width, sDate:s, dur, startCol, endCol };
   }
 
   function startDrag(ev, mode) {
-    ev.preventDefault();
-    ev.stopPropagation();
+    ev.preventDefault(); ev.stopPropagation();
     const container = rowRef.current;
     if (!container) return;
     const rect = container.getBoundingClientRect();
     const startX = ev.clientX;
-    const barData = getBarData();
-    if (!barData) return;
-
-    dragRef.current = { mode, startX, rect, barData };
+    const segData = getSegData();
+    if (!segData) return;
+    dragRef.current = { mode, startX, rect, segData };
 
     function onMove(mv) {
       if (!dragRef.current) return;
-      const { mode, startX, rect, barData } = dragRef.current;
+      const { mode, startX, rect, segData } = dragRef.current;
       const dx = mv.clientX - startX;
-      const daysDelta = Math.round((dx / rect.width) * 7);
-
-      let newStart = new Date(barData.sDay);
-      let newDur = barData.dur;
-
-      if (mode === "move") {
-        newStart = new Date(barData.sDay.getTime() + daysDelta * MS_PER_DAY);
-      } else if (mode === "resize") {
-        newDur = Math.max(1, barData.dur + daysDelta);
+      const colsDelta = Math.round((dx/rect.width)*nCols);
+      let newStart = new Date(segData.sDate);
+      let newDur = segData.dur;
+      if (mode==="move") {
+        // shift by colsDelta work-days (can cross weekends by counting business days)
+        let shifted = new Date(segData.sDate);
+        let remaining = Math.abs(colsDelta);
+        const dir = colsDelta >= 0 ? 1 : -1;
+        while (remaining > 0) {
+          shifted = new Date(shifted.getTime()+dir*MS_PER_DAY);
+          const dow = shifted.getDay();
+          if (dow!==0 && dow!==6) remaining--;
+        }
+        newStart = shifted;
+      } else if (mode==="resize") {
+        newDur = Math.max(1, segData.dur + colsDelta);
       }
-
-      // Visual feedback only - actual save on mouseup
-      const el = container.querySelector(".gantt-bar");
+      const el = container.querySelector(".gantt-seg-"+segIdx);
       if (el) {
-        const tot = wEnd - wStart;
-        const sDay = new Date(newStart); sDay.setHours(0,0,0,0);
-        const eDay = new Date(sDay.getTime() + newDur * MS_PER_DAY); eDay.setHours(23,59,59,999);
-        const left = Math.max(0, (sDay - wStart) / tot * 100);
-        const right = Math.min(100, (eDay - wStart) / tot * 100);
-        el.style.left = left + "%";
-        el.style.width = Math.max(1, right - left) + "%";
+        // recompute visual position
+        let cursor = new Date(newStart); let count=0; let lastDay=new Date(newStart);
+        while (count<newDur) {
+          const dow=cursor.getDay();
+          if (dow!==0&&dow!==6){count++;lastDay=new Date(cursor);}
+          if (count<newDur) cursor=new Date(cursor.getTime()+MS_PER_DAY);
+        }
+        const sc = dateToCol(newStart); const ec = dateToCol(lastDay);
+        const vs = sc===null?(newStart<wDays[0]?0:null):sc;
+        const ve = ec===null?(lastDay>wDays[nCols-1]?nCols-1:null):ec;
+        if (vs!==null && ve!==null) {
+          el.style.left = ((vs/nCols)*100)+"%";
+          el.style.width = (((ve-vs+1)/nCols)*100)+"%";
+        }
       }
       dragRef.current.newStart = newStart;
       dragRef.current.newDur = newDur;
@@ -550,56 +671,131 @@ function GanttBar({ task, wStart, wEnd, tok, onUpdate, saving }) {
       document.removeEventListener("mousemove", onMove);
       document.removeEventListener("mouseup", onUp);
       if (!dragRef.current) return;
-      const { newStart, newDur, mode } = dragRef.current;
-      if (newStart || newDur) {
-        const fields = {};
-        if (mode === "move" && newStart) {
-          const d = new Date(newStart); d.setHours(12,0,0,0);
-          fields.Iniciodetarea = d.toISOString();
-        }
-        if (mode === "resize" && newDur !== undefined) {
-          fields.Duraciondelatarea = newDur;
-          // Also clear fin date so duration drives the end
-          fields.Findetarea = null;
-        }
-        await onUpdate(task._id, fields);
+      const { newStart, newDur } = dragRef.current;
+      if (newStart && newDur) {
+        const iso = newStart.getFullYear()+"-"+String(newStart.getMonth()+1).padStart(2,"0")+"-"+String(newStart.getDate()).padStart(2,"0");
+        await onUpdate(segIdx, { inicio: iso, dias: newDur });
       }
       dragRef.current = null;
     }
-
     document.addEventListener("mousemove", onMove);
     document.addEventListener("mouseup", onUp);
   }
 
-  const barData = getBarData();
+  const segData = getSegData();
   const col = tipoColor[arrFirst(task[fn("tipo")])] || C.steel;
-  if (!barData) return e("div", {ref: rowRef, style:{position:"relative",height:32,background:C.border+"44",borderRadius:4}});
+  if (!segData) return null;
 
-  return e("div", {
+  return e("div",{
+    className: "gantt-seg-"+segIdx,
     ref: rowRef,
-    style: {position:"relative", height:32, background:C.border+"44", borderRadius:4, userSelect:"none"}
-  },
-    ...[1,2,3,4,5,6].map(i => e("div",{key:i,style:{position:"absolute",left:(i/7*100)+"%",top:0,bottom:0,width:1,background:C.border}})),
-    e("div", {
-      className: "gantt-bar",
-      style: {
-        position:"absolute", left:barData.left+"%", width:barData.width+"%",
-        top:3, bottom:3,
-        background: col+"cc", borderRadius:4, border:"1px solid "+col,
-        display:"flex", alignItems:"center", overflow:"hidden",
-        cursor: saving ? "wait" : "grab",
-        transition: dragRef.current ? "none" : "left 0.2s, width 0.2s"
-      },
-      onMouseDown: (ev) => startDrag(ev, "move")
+    style: {
+      position:"absolute", left:segData.left+"%", width:segData.width+"%",
+      top:3, bottom:3,
+      background: col+"cc", borderRadius:4, border:"1px solid "+col,
+      display:"flex", alignItems:"center", overflow:"hidden",
+      cursor: saving?"wait":"grab",
+      transition: dragRef.current?"none":"left 0.2s, width 0.2s"
     },
-      e("span",{style:{fontSize:10,color:"#fff",fontWeight:700,whiteSpace:"nowrap",paddingLeft:6,flex:1,overflow:"hidden",textOverflow:"ellipsis"}},
-        arrFirst(task[fn("tipo")])||"", " · ", barData.dur+"d"
+    onMouseDown: (ev)=>startDrag(ev,"move")
+  },
+    e("span",{style:{fontSize:10,color:"#fff",fontWeight:700,whiteSpace:"nowrap",paddingLeft:6,flex:1,overflow:"hidden",textOverflow:"ellipsis"}},
+      arrFirst(task[fn("tipo")])||"", " · ", segData.dur+"d", !isOnlySegment&&e("span",{style:{opacity:0.8}}," (tramo)")
+    ),
+    e("div",{
+      style:{width:8,height:"100%",cursor:"ew-resize",background:"rgba(0,0,0,0.2)",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center"},
+      onMouseDown:(ev)=>{ev.stopPropagation();startDrag(ev,"resize");}
+    }, e("div",{style:{width:2,height:12,background:"rgba(255,255,255,0.7)",borderRadius:1}}))
+  );
+}
+
+function GanttRow({ task, wStart, wDays, tok, onUpdate, saving, onOpenTramos }) {
+  const rowRef = useRef(null);
+  let tramos = parseTramos(task);
+  if (!tramos) {
+    // Fallback to single segment from Inicio/Duracion fields
+    const s = task[fn("inicio")];
+    const dur = task[fn("duracion")] ? parseInt(task[fn("duracion")]) : 1;
+    if (!s) tramos = [];
+    else tramos = [{ inicio: s.substring(0,10), dias: dur }];
+  }
+
+  async function handleSegUpdate(segIdx, newSeg) {
+    const newTramos = tramos.map((t,i)=>i===segIdx?newSeg:t);
+    await onUpdate(task._id, {
+      Tramos: saveTramosField(newTramos),
+      Duraciondelatarea: tramosTotalDias(newTramos),
+      Iniciodetarea: newTramos[0] ? newTramos[0].inicio+"T12:00:00Z" : null,
+      Findetarea: null
+    });
+  }
+
+  return e("div",{
+    ref: rowRef,
+    style:{position:"relative", height:32, background:C.border+"44", borderRadius:4, userSelect:"none"}
+  },
+    ...wDays.map((d,i)=>e("div",{key:i,style:{position:"absolute",left:(i/wDays.length*100)+"%",top:0,bottom:0,width:1,background:C.border}})),
+    ...tramos.map((tramo,idx)=>e(GanttSegment,{
+      key:idx, task, segIdx:idx, tramo, wStart, wDays, tok,
+      onUpdate:handleSegUpdate, saving, isOnlySegment: tramos.length===1
+    })),
+    // "+" button to add a new tramo, shown at the right edge
+    e("button",{
+      title:"Agregar tramo (otro período de trabajo)",
+      onClick:(ev)=>{ ev.stopPropagation(); onOpenTramos(task, tramos); },
+      style:{
+        position:"absolute", right:2, top:"50%", transform:"translateY(-50%)",
+        width:18, height:18, borderRadius:"50%", background:C.accent, border:"none",
+        color:"#000", fontSize:12, fontWeight:900, cursor:"pointer", lineHeight:"18px",
+        zIndex:5
+      }
+    }, "+")
+  );
+}
+
+// Modal to manage all tramos of a task
+function TramosModal({ task, tramos, onClose, onSave }) {
+  const [list, setList] = useState(tramos.length>0?tramos.map(t=>({...t})):[{inicio:new Date().toISOString().substring(0,10),dias:1}]);
+  const [saving, setSaving] = useState(false);
+
+  function update(i,k,v){ setList(p=>p.map((t,idx)=>idx===i?{...t,[k]:v}:t)); }
+  function addTramo(){ setList(p=>[...p,{inicio:new Date().toISOString().substring(0,10),dias:1}]); }
+  function removeTramo(i){ setList(p=>p.filter((_,idx)=>idx!==i)); }
+
+  async function save() {
+    setSaving(true);
+    try {
+      const clean = list.filter(t=>t.inicio && parseInt(t.dias)>0).map(t=>({inicio:t.inicio,dias:parseInt(t.dias)}));
+      await onSave(clean);
+    } catch(ex) { alert("Error: "+ex.message); }
+    setSaving(false);
+  }
+
+  const total = tramosTotalDias(list.map(t=>({dias:t.dias})));
+
+  return e("div",{style:{position:"fixed",inset:0,background:"#000a",zIndex:1100,display:"flex",alignItems:"center",justifyContent:"center"},onClick:ev=>ev.target===ev.currentTarget&&onClose()},
+    e("div",{style:{background:C.surface,border:"1px solid "+C.border,borderRadius:12,width:480,maxHeight:"85vh",overflow:"auto",padding:28}},
+      e("div",{style:{fontSize:15,fontWeight:800,marginBottom:4}},"Tramos de trabajo"),
+      e("div",{style:{fontSize:12,color:C.dim,marginBottom:18}},task.Title),
+      ...list.map((t,i)=>e("div",{key:i,style:{display:"flex",gap:8,marginBottom:10,alignItems:"flex-end"}},
+        e("div",{style:{flex:1}},
+          e("label",{style:{fontSize:10,color:C.dim,textTransform:"uppercase",display:"block",marginBottom:3}},"Inicio tramo "+(i+1)),
+          e("input",{type:"date",value:t.inicio,onChange:ev=>update(i,"inicio",ev.target.value),style:{width:"100%",background:C.bg,border:"1px solid "+C.border,borderRadius:6,padding:"7px 8px",fontSize:13,color:C.text}})
+        ),
+        e("div",{style:{width:90}},
+          e("label",{style:{fontSize:10,color:C.dim,textTransform:"uppercase",display:"block",marginBottom:3}},"Días"),
+          e("input",{type:"number",min:1,value:t.dias,onChange:ev=>update(i,"dias",ev.target.value),style:{width:"100%",background:C.bg,border:"1px solid "+C.border,borderRadius:6,padding:"7px 8px",fontSize:13,color:C.text}})
+        ),
+        list.length>1&&e("button",{onClick:()=>removeTramo(i),style:{background:"#fee2e2",border:"1px solid "+C.danger,borderRadius:6,color:C.danger,padding:"7px 10px",cursor:"pointer",fontSize:12}},"✕")
+      )),
+      e("button",{onClick:addTramo,style:{width:"100%",padding:"8px",background:C.surfaceHigh,border:"1px dashed "+C.border,borderRadius:6,color:C.dim,cursor:"pointer",fontSize:12,marginBottom:16}},"+ Agregar otro tramo"),
+      e("div",{style:{fontSize:12,color:C.dim,marginBottom:18,padding:"8px 12px",background:C.surfaceHigh,borderRadius:6}},
+        "Total días trabajados: ",e("strong",{style:{color:C.text}},total+"d")
       ),
-      // Resize handle
-      e("div",{
-        style:{width:8,height:"100%",cursor:"ew-resize",background:"rgba(0,0,0,0.2)",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center"},
-        onMouseDown:(ev)=>{ ev.stopPropagation(); startDrag(ev,"resize"); }
-      }, e("div",{style:{width:2,height:12,background:"rgba(255,255,255,0.7)",borderRadius:1}}))
+      e("div",{style:{display:"flex",gap:10,justifyContent:"flex-end"}},
+        e("button",{onClick:onClose,style:{padding:"9px 18px",background:C.surfaceHigh,border:"1px solid "+C.border,borderRadius:6,color:C.text,cursor:"pointer"}},"Cancelar"),
+        e("button",{onClick:save,disabled:saving,style:{padding:"9px 22px",background:C.accent,border:"none",borderRadius:6,color:"#000",fontWeight:800,cursor:"pointer"}},saving?"Guardando...":"Guardar tramos")
+      )
     )
   );
 }
@@ -608,21 +804,34 @@ function GanttView({ tasks, tok, onUpdateTask }) {
   const [off, setOff] = useState(0);
   const [saving, setSaving] = useState(null);
   const [toast, setToast] = useState("");
+  const [tramosTask, setTramosTask] = useState(null); // {task, tramos}
 
   const wStart = useMemo(()=>{ const d=new Date(); d.setDate(d.getDate()-d.getDay()+1+off*7); d.setHours(0,0,0,0); return d; },[off]);
-  const days = Array.from({length:7},(_,i)=>{ const d=new Date(wStart); d.setDate(d.getDate()+i); return d; });
-  const wEnd = new Date(days[6]); wEnd.setHours(23,59,59);
-  const dnames = ["Lun","Mar","Mié","Jue","Vie","Sáb","Dom"];
-  const wLabel = days[0].getDate()+"/"+(days[0].getMonth()+1)+" — "+days[6].getDate()+"/"+(days[6].getMonth()+1)+"/"+days[6].getFullYear();
+  // Only 5 work days: Mon-Fri
+  const wDays = Array.from({length:5},(_,i)=>{ const d=new Date(wStart); d.setDate(d.getDate()+i); return d; });
+  const wEndFull = new Date(wStart); wEndFull.setDate(wEndFull.getDate()+6); wEndFull.setHours(23,59,59);
+  const dnames = ["Lun","Mar","Mié","Jue","Vie"];
+  const wLabel = wDays[0].getDate()+"/"+(wDays[0].getMonth()+1)+" — "+wDays[4].getDate()+"/"+(wDays[4].getMonth()+1)+"/"+wDays[4].getFullYear();
 
-  const visible = tasks.filter(t=>{
-    const s = t[fn("inicio")] ? new Date(t[fn("inicio")]) : null;
-    if (!s) return false;
-    const dur = t[fn("duracion")] ? parseInt(t[fn("duracion")]) : 0;
-    const en = t[fn("fin")] ? new Date(t[fn("fin")]) : (dur>0 ? new Date(s.getTime()+dur*86400000) : s);
-    return s<=wEnd && en>=wStart;
-  });
+  function taskTramos(t) {
+    let tramos = parseTramos(t);
+    if (!tramos) {
+      const s = t[fn("inicio")];
+      const dur = t[fn("duracion")] ? parseInt(t[fn("duracion")]) : 1;
+      tramos = s ? [{ inicio: s.substring(0,10), dias: dur }] : [];
+    }
+    return tramos;
+  }
 
+  function tramoOverlapsWeek(tramo) {
+    const s = new Date(tramo.inicio+"T00:00:00");
+    const dur = parseInt(tramo.dias)||1;
+    let cursor=new Date(s); let count=0; let lastDay=new Date(s);
+    while(count<dur){ const dow=cursor.getDay(); if(dow!==0&&dow!==6){count++;lastDay=new Date(cursor);} if(count<dur) cursor=new Date(cursor.getTime()+86400000); }
+    return s <= wEndFull && lastDay >= wStart;
+  }
+
+  const visible = tasks.filter(t => taskTramos(t).some(tramoOverlapsWeek));
   const groups = {};
   visible.forEach(t=>{ const b=t[fn("buque")]||"Sin barco"; if(!groups[b])groups[b]=[]; groups[b].push(t); });
 
@@ -639,6 +848,16 @@ function GanttView({ tasks, tok, onUpdateTask }) {
     setSaving(null);
   }
 
+  async function saveTramosModal(newTramos) {
+    await handleUpdate(tramosTask.task._id, {
+      Tramos: saveTramosField(newTramos),
+      Duraciondelatarea: tramosTotalDias(newTramos),
+      Iniciodetarea: newTramos[0] ? newTramos[0].inicio+"T12:00:00Z" : null,
+      Findetarea: null
+    });
+    setTramosTask(null);
+  }
+
   return e("div",null,
     e("div",{style:{display:"flex",alignItems:"center",gap:12,marginBottom:20}},
       e("button",{onClick:()=>setOff(o=>o-1),style:{background:C.surface,border:"1px solid "+C.border,color:C.text,padding:"6px 14px",borderRadius:6,cursor:"pointer",fontWeight:500}},"← Anterior"),
@@ -648,13 +867,13 @@ function GanttView({ tasks, tok, onUpdateTask }) {
       e("button",{onClick:()=>setOff(o=>o+1),style:{background:C.surface,border:"1px solid "+C.border,color:C.text,padding:"6px 14px",borderRadius:6,cursor:"pointer",fontWeight:500}},"Siguiente →")
     ),
     e("div",{style:{fontSize:11,color:C.dim,marginBottom:8,padding:"6px 10px",background:C.surfaceHigh,borderRadius:6,border:"1px solid "+C.border}},
-      "💡 Arrastrá la barra para mover la fecha de inicio · Arrastrá el borde derecho ",e("strong",null,"▐")," para cambiar la duración"
+      "💡 Arrastrá la barra para mover el inicio · Arrastrá el borde derecho ▐ para la duración · Click en ",
+      e("strong",{style:{color:C.accent}},"⊕")," para agregar tramos (pausar y retomar la tarea otro día)"
     ),
-    // Header days
     e("div",{style:{display:"grid",gridTemplateColumns:"260px 1fr",marginBottom:4,borderBottom:"2px solid "+C.border,paddingBottom:4}},
       e("div",{style:{fontSize:11,fontWeight:700,color:C.dim,textTransform:"uppercase",letterSpacing:"0.06em"}},"Tarea"),
-      e("div",{style:{display:"grid",gridTemplateColumns:"repeat(7,1fr)"}},
-        ...days.map((d,i)=>{
+      e("div",{style:{display:"grid",gridTemplateColumns:"repeat(5,1fr)"}},
+        ...wDays.map((d,i)=>{
           const today=d.toDateString()===new Date().toDateString();
           return e("div",{key:i,style:{textAlign:"center",fontSize:11,fontWeight:700,color:today?C.accent:C.dim,padding:"2px 0",background:today?C.accent+"18":"transparent",borderRadius:3}},
             dnames[i],e("br"),e("span",{style:{fontSize:13,fontWeight:700,color:today?C.accent:C.text}},d.getDate())
@@ -680,7 +899,7 @@ function GanttView({ tasks, tok, onUpdateTask }) {
               t.Title,
               t[fn("duracion")]&&e("span",{style:{fontSize:10,color:C.dim,marginLeft:5,background:C.surfaceHigh,border:"1px solid "+C.border,padding:"1px 5px",borderRadius:3}},t[fn("duracion")]+"d")
             ),
-            e(GanttBar,{task:t,wStart,wEnd,tok,onUpdate:handleUpdate,saving:saving===t._id})
+            e(GanttRow,{task:t,wStart,wDays,tok,onUpdate:handleUpdate,saving:saving===t._id,onOpenTramos:(task,tramos)=>setTramosTask({task,tramos})})
           ))
         )),
     e("div",{style:{marginTop:20,display:"flex",gap:14,flexWrap:"wrap",paddingTop:12,borderTop:"1px solid "+C.border}},
@@ -688,7 +907,8 @@ function GanttView({ tasks, tok, onUpdateTask }) {
       ...Object.entries(tipoColor).map(([t,c])=>e("div",{key:t,style:{display:"flex",alignItems:"center",gap:4,fontSize:11,color:C.dim}},
         e("div",{style:{width:10,height:10,background:c,borderRadius:2}}),t
       ))
-    )
+    ),
+    tramosTask&&e(TramosModal,{task:tramosTask.task,tramos:tramosTask.tramos,onClose:()=>setTramosTask(null),onSave:saveTramosModal})
   );
 }
 
@@ -710,6 +930,7 @@ function App() {
   const [editT, setEditT] = useState(null);
   const [newT, setNewT] = useState(false);
   const [ok, setOk] = useState("");
+  const [kpiDetail, setKpiDetail] = useState(null); // {title, items}
 
   useEffect(()=>{
     const account = msalInstance.getAccount();
@@ -738,6 +959,7 @@ function App() {
     setTok(""); setItems([]); setUserName("");
   }
   function flash(m){ setOk(m); setTimeout(()=>setOk(""),3000); }
+  function clearFilters(){ setFBuque("Todos"); setFEstado("Todos"); setFTipo("Todos"); setFSeccion("Todos"); setQ(""); }
   async function refresh(){ setLoading(true); try{setItems(await getItems(tok));}catch(ex){setErr(ex.message);}finally{setLoading(false);} }
 
   async function saveTask(itemId, fields) {
@@ -796,19 +1018,20 @@ function App() {
     return true;
   });
 
-  // Dashboard uses fBuque filter only
-  const dashItems = fBuque==="Todos" ? items : items.filter(i=>i[fn("buque")]===fBuque);
+  // Dashboard, Insumos and Planificación all use the SAME global filters as Tareas
+  const dashItems = filtered;
 
   const total=dashItems.length;
-  const nFin=dashItems.filter(i=>getEstado(i)==="Finalizado").length;
-  const nEnc=dashItems.filter(i=>["En curso","En curso con retraso"].includes(getEstado(i))).length;
-  const nPen=dashItems.filter(i=>getEstado(i)==="Pendiente").length;
-  const pct=total>0?Math.round(nFin/total*100):0;
+  const nFin=dashItems.filter(i=>getEstado(i)==="Finalizado");
+  const nEnc=dashItems.filter(i=>["En curso","En curso con retraso"].includes(getEstado(i)));
+  const nPen=dashItems.filter(i=>getEstado(i)==="Pendiente");
+  const pct=total>0?Math.round(nFin.length/total*100):0;
   const montoTot=dashItems.reduce((s,i)=>s+parseMonto(i[fn("monto")]),0);
-  const montoPend=dashItems.filter(i=>getEstado(i)!=="Finalizado").reduce((s,i)=>s+parseMonto(i[fn("monto")]),0);
+  const itemsPend=dashItems.filter(i=>getEstado(i)!=="Finalizado");
+  const montoPend=itemsPend.reduce((s,i)=>s+parseMonto(i[fn("monto")]),0);
 
   const byBuque=buques.filter(b=>b!=="Todos").map(b=>{
-    const t=items.filter(i=>i[fn("buque")]===b);
+    const t=dashItems.filter(i=>i[fn("buque")]===b);
     const f=t.filter(i=>getEstado(i)==="Finalizado").length;
     const m=t.reduce((s,i)=>s+parseMonto(i[fn("monto")]),0);
     const mPend=t.filter(i=>getEstado(i)!=="Finalizado").reduce((s,i)=>s+parseMonto(i[fn("monto")]),0);
@@ -851,11 +1074,53 @@ function App() {
 
   const selSt={background:C.surface,border:"1px solid "+C.border,borderRadius:6,color:C.text,padding:"7px 12px",fontSize:12};
 
-  const KPI=(l,v,sub,col)=>e("div",{style:{background:C.surface,border:"1px solid "+C.border,borderLeft:"3px solid "+(col||C.accent),borderRadius:8,padding:"14px 18px",flex:1,minWidth:110}},
+  const KPI=(l,v,sub,col,onClick)=>e("div",{
+    onClick:onClick,
+    style:{background:C.surface,border:"1px solid "+C.border,borderLeft:"3px solid "+(col||C.accent),borderRadius:8,padding:"14px 18px",flex:1,minWidth:110,cursor:onClick?"pointer":"default",transition:"box-shadow 0.15s"},
+    onMouseEnter:onClick?(ev)=>{ev.currentTarget.style.boxShadow="0 2px 8px rgba(0,0,0,0.08)";}:undefined,
+    onMouseLeave:onClick?(ev)=>{ev.currentTarget.style.boxShadow="none";}:undefined
+  },
     e("div",{style:{fontSize:10,color:C.dim,textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:5}},l),
     e("div",{style:{fontSize:26,fontWeight:800,color:col||C.text,fontFamily:"monospace"}},v),
     sub&&e("div",{style:{fontSize:11,color:C.dim,marginTop:3}},sub)
   );
+
+  function FilterBar({showSearch}) {
+    const activeCount = [fBuque!=="Todos",fEstado!=="Todos",fTipo!=="Todos",fSeccion!=="Todos",q!==""].filter(Boolean).length;
+    return e("div",{style:{display:"flex",gap:12,marginBottom:20,flexWrap:"wrap",alignItems:"flex-end"}},
+      showSearch&&e("div",null,
+        e("div",{style:{fontSize:10,color:C.dim,textTransform:"uppercase",marginBottom:4,letterSpacing:"0.06em"}},"Buscar"),
+        e("input",{placeholder:"🔍 Texto...",value:q,onChange:ev=>setQ(ev.target.value),style:{...selSt,width:180,outline:"none",display:"block"}})
+      ),
+      e("div",null,
+        e("div",{style:{fontSize:10,color:C.dim,textTransform:"uppercase",marginBottom:4,letterSpacing:"0.06em"}},"Barco"),
+        e("select",{value:fBuque,onChange:ev=>setFBuque(ev.target.value),style:{...selSt,display:"block"}},...buques.map(o=>e("option",{key:o,value:o},o)))
+      ),
+      e("div",null,
+        e("div",{style:{fontSize:10,color:C.dim,textTransform:"uppercase",marginBottom:4,letterSpacing:"0.06em"}},"Estado"),
+        e("select",{value:fEstado,onChange:ev=>setFEstado(ev.target.value),style:{...selSt,display:"block"}},...["Todos",...FIELDS.estado.opts].map(o=>e("option",{key:o,value:o},o)))
+      ),
+      e("div",null,
+        e("div",{style:{fontSize:10,color:C.dim,textTransform:"uppercase",marginBottom:4,letterSpacing:"0.06em"}},"Tipo de tarea"),
+        e("select",{value:fTipo,onChange:ev=>setFTipo(ev.target.value),style:{...selSt,display:"block"}},...tipos.map(o=>e("option",{key:o,value:o},o)))
+      ),
+      e("div",null,
+        e("div",{style:{fontSize:10,color:C.dim,textTransform:"uppercase",marginBottom:4,letterSpacing:"0.06em"}},"Sección"),
+        e("select",{value:fSeccion,onChange:ev=>setFSeccion(ev.target.value),style:{...selSt,display:"block"}},...secciones.map(o=>e("option",{key:o,value:o},o)))
+      ),
+      e("button",{
+        onClick:clearFilters,
+        disabled:activeCount===0,
+        style:{
+          background:activeCount>0?"#fee2e2":C.surfaceHigh, border:"1px solid "+(activeCount>0?C.danger:C.border),
+          color:activeCount>0?C.danger:C.dim, padding:"7px 14px", borderRadius:6,
+          cursor:activeCount>0?"pointer":"default", fontSize:12, fontWeight:600, height:36
+        }
+      }, "↺ Refrescar filtros"+(activeCount>0?" ("+activeCount+")":"")),
+      e("div",{style:{flex:1}}),
+      e("span",{style:{color:C.dim,fontSize:13,paddingBottom:8}},filtered.length+" tareas")
+    );
+  }
 
   function BarChart({data, maxVal, colorFn, valLabel, roundVal}) {
     return e("div",null,
@@ -898,21 +1163,15 @@ function App() {
 
       // ── DASHBOARD
       tab==="dash"&&e("div",null,
-        // Filtro barco dashboard
-        e("div",{style:{display:"flex",justifyContent:"flex-end",marginBottom:16,gap:12,alignItems:"center"}},
-          e("span",{style:{fontSize:12,color:C.dim}},"Filtrar por barco:"),
-          e("select",{value:fBuque,onChange:ev=>setFBuque(ev.target.value),style:selSt},
-            ...buques.map(o=>e("option",{key:o,value:o},o))
-          )
-        ),
+        e(FilterBar,{showSearch:true}),
         // KPIs
         e("div",{style:{display:"flex",gap:12,marginBottom:20,flexWrap:"wrap"}},
-          KPI("Avance global",pct+"%",nFin+" de "+total+" tareas",C.success),
-          KPI("Tareas pendientes",nPen,null,C.dim),
-          KPI("Tareas en curso",nEnc,null,C.steel),
-          KPI("Tareas finalizadas",nFin,null,C.success),
-          KPI("Presupuesto total",fmt(montoTot),"insumos estimados",C.accent),
-          KPI("Costos tareas por ejecutar",fmt(montoPend),"tareas no finalizadas",C.warning)
+          KPI("Avance global",pct+"%",nFin.length+" de "+total+" tareas",C.success,()=>setKpiDetail({title:"Avance global — Todas las tareas filtradas",items:dashItems})),
+          KPI("Tareas pendientes",nPen.length,null,C.dim,()=>setKpiDetail({title:"Tareas pendientes",items:nPen})),
+          KPI("Tareas en curso",nEnc.length,null,C.steel,()=>setKpiDetail({title:"Tareas en curso",items:nEnc})),
+          KPI("Tareas finalizadas",nFin.length,null,C.success,()=>setKpiDetail({title:"Tareas finalizadas",items:nFin})),
+          KPI("Presupuesto total",fmt(montoTot),"insumos estimados",C.accent,()=>setKpiDetail({title:"Presupuesto total — Todas las tareas con monto",items:dashItems.filter(i=>parseMonto(i[fn("monto")])>0)})),
+          KPI("Costos tareas por ejecutar",fmt(montoPend),"tareas no finalizadas",C.warning,()=>setKpiDetail({title:"Costos por ejecutar — Tareas no finalizadas con monto",items:itemsPend.filter(i=>parseMonto(i[fn("monto")])>0)}))
         ),
         // Charts row 1
         e("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16,marginBottom:16}},
@@ -958,30 +1217,9 @@ function App() {
 
       // ── TAREAS
       tab==="tareas"&&e("div",null,
-        // Filters with labels
-        e("div",{style:{display:"flex",gap:12,marginBottom:20,flexWrap:"wrap",alignItems:"flex-end"}},
-          e("div",null,
-            e("div",{style:{fontSize:10,color:C.dim,textTransform:"uppercase",marginBottom:4,letterSpacing:"0.06em"}},"Buscar"),
-            e("input",{placeholder:"🔍 Texto...",value:q,onChange:ev=>setQ(ev.target.value),style:{...selSt,width:180,outline:"none",display:"block"}})
-          ),
-          e("div",null,
-            e("div",{style:{fontSize:10,color:C.dim,textTransform:"uppercase",marginBottom:4,letterSpacing:"0.06em"}},"Barco"),
-            e("select",{value:fBuque,onChange:ev=>setFBuque(ev.target.value),style:{...selSt,display:"block"}},...buques.map(o=>e("option",{key:o,value:o},o)))
-          ),
-          e("div",null,
-            e("div",{style:{fontSize:10,color:C.dim,textTransform:"uppercase",marginBottom:4,letterSpacing:"0.06em"}},"Estado"),
-            e("select",{value:fEstado,onChange:ev=>setFEstado(ev.target.value),style:{...selSt,display:"block"}},...["Todos",...FIELDS.estado.opts].map(o=>e("option",{key:o,value:o},o)))
-          ),
-          e("div",null,
-            e("div",{style:{fontSize:10,color:C.dim,textTransform:"uppercase",marginBottom:4,letterSpacing:"0.06em"}},"Tipo de tarea"),
-            e("select",{value:fTipo,onChange:ev=>setFTipo(ev.target.value),style:{...selSt,display:"block"}},...tipos.map(o=>e("option",{key:o,value:o},o)))
-          ),
-          e("div",null,
-            e("div",{style:{fontSize:10,color:C.dim,textTransform:"uppercase",marginBottom:4,letterSpacing:"0.06em"}},"Sección"),
-            e("select",{value:fSeccion,onChange:ev=>setFSeccion(ev.target.value),style:{...selSt,display:"block"}},...secciones.map(o=>e("option",{key:o,value:o},o)))
-          ),
-          e("div",{style:{flex:1}}),
-          e("span",{style:{color:C.dim,fontSize:13,paddingBottom:8}},filtered.length+" tareas"),
+        // Filters
+        e(FilterBar,{showSearch:true}),
+        e("div",{style:{display:"flex",justifyContent:"flex-end",marginBottom:12}},
           e("button",{onClick:()=>setNewT(true),style:{background:C.accent,border:"none",borderRadius:6,color:"#000",fontWeight:800,padding:"8px 16px",cursor:"pointer",fontSize:13,height:36}},"+ Nueva tarea")
         ),
         e("div",{style:{background:C.surface,border:"1px solid "+C.border,borderRadius:8,overflow:"auto"}},
@@ -1023,20 +1261,24 @@ function App() {
       ),
 
       // ── GANTT
-      tab==="gantt"&&e("div",{style:{background:C.surface,border:"1px solid "+C.border,borderRadius:8,padding:24}},
-        e(GanttView,{tasks:filtered,tok,onUpdateTask:async(itemId,fields)=>{
-          await gPatch(tok,BASE+"/items/"+itemId+"/fields",fields);
-          await refresh();
-        }})
+      tab==="gantt"&&e("div",null,
+        e(FilterBar,{showSearch:true}),
+        e("div",{style:{background:C.surface,border:"1px solid "+C.border,borderRadius:8,padding:24}},
+          e(GanttView,{tasks:filtered,tok,onUpdateTask:async(itemId,fields)=>{
+            await gPatch(tok,BASE+"/items/"+itemId+"/fields",fields);
+            await refresh();
+          }})
+        )
       ),
 
       // ── INSUMOS
       tab==="insumos"&&e("div",null,
+        e(FilterBar,{showSearch:true}),
         // KPI row
         e("div",{style:{display:"flex",gap:12,marginBottom:20,flexWrap:"wrap"}},
-          KPI("Monto total estimado",fmt(montoTot),"todos los barcos",C.accent),
-          KPI("Por adquirir",fmt(montoPend),"tareas no finalizadas",C.warning),
-          KPI("Ejecutado",fmt(montoTot-montoPend),"tareas finalizadas",C.success),
+          KPI("Monto total estimado",fmt(montoTot),"tareas filtradas",C.accent,()=>setKpiDetail({title:"Monto total estimado",items:dashItems.filter(i=>parseMonto(i[fn("monto")])>0)})),
+          KPI("Por adquirir",fmt(montoPend),"tareas no finalizadas",C.warning,()=>setKpiDetail({title:"Por adquirir — Tareas no finalizadas con monto",items:itemsPend.filter(i=>parseMonto(i[fn("monto")])>0)})),
+          KPI("Ejecutado",fmt(montoTot-montoPend),"tareas finalizadas",C.success,()=>setKpiDetail({title:"Ejecutado — Tareas finalizadas con monto",items:nFin.filter(i=>parseMonto(i[fn("monto")])>0)})),
           KPI("Por adquirir próxima semana",fmt(montoSemana),"en base a planificación",C.steel),
           KPI("Por adquirir próxima quincena",fmt(montoQuincena),"en base a planificación","#9b59b6")
         ),
@@ -1071,7 +1313,7 @@ function App() {
           // Top 10 todas
           e("div",{style:{background:C.surface,border:"1px solid "+C.border,borderRadius:8,padding:20}},
             e("div",{style:{fontSize:12,fontWeight:700,color:C.dim,textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:16}},"Top 10 tareas por costo"),
-            ...[...items].filter(i=>parseMonto(i[fn("monto")])>0).sort((a,b)=>parseMonto(b[fn("monto")])-parseMonto(a[fn("monto")])).slice(0,10).map(i=>
+            ...[...dashItems].filter(i=>parseMonto(i[fn("monto")])>0).sort((a,b)=>parseMonto(b[fn("monto")])-parseMonto(a[fn("monto")])).slice(0,10).map(i=>
               e("div",{key:i._id,style:{marginBottom:8,display:"flex",justifyContent:"space-between",alignItems:"flex-start"}},
                 e("div",null,
                   e("div",{style:{fontSize:12,fontWeight:600}},i.Title),
@@ -1085,7 +1327,7 @@ function App() {
           e("div",{style:{background:C.surface,border:"1px solid "+C.border,borderRadius:8,padding:20,gridColumn:"1 / -1"}},
             e("div",{style:{fontSize:12,fontWeight:700,color:C.dim,textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:16}},"Top 10 tareas pendientes por costo"),
             e("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}},
-              ...[...items].filter(i=>parseMonto(i[fn("monto")])>0&&getEstado(i)!=="Finalizado").sort((a,b)=>parseMonto(b[fn("monto")])-parseMonto(a[fn("monto")])).slice(0,10).map(i=>
+              ...[...dashItems].filter(i=>parseMonto(i[fn("monto")])>0&&getEstado(i)!=="Finalizado").sort((a,b)=>parseMonto(b[fn("monto")])-parseMonto(a[fn("monto")])).slice(0,10).map(i=>
                 e("div",{key:i._id,style:{display:"flex",justifyContent:"space-between",alignItems:"flex-start",padding:"8px 12px",background:C.surfaceHigh,borderRadius:6,border:"1px solid "+C.border}},
                   e("div",null,
                     e("div",{style:{fontSize:12,fontWeight:600}},i.Title),
@@ -1104,7 +1346,8 @@ function App() {
     ),
 
     editT&&e(TaskModal,{task:editT,onClose:()=>setEditT(null),onSave:saveTask,onDelete:deleteTask,tok}),
-    newT&&e(TaskModal,{task:null,onClose:()=>setNewT(false),onSave:saveTask,isNew:true,tok})
+    newT&&e(TaskModal,{task:null,onClose:()=>setNewT(false),onSave:saveTask,isNew:true,tok}),
+    kpiDetail&&e(KpiDetailModal,{title:kpiDetail.title,items:kpiDetail.items,onClose:()=>setKpiDetail(null),onEditTask:(t)=>setEditT(t)})
   );
 }
 
